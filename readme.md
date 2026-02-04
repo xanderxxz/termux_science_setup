@@ -117,6 +117,8 @@ The installer checks for `-fno-openmp-implicit-rpath` in Python sysconfig and pa
    - The installer now skips unavailable `pkg` names automatically; rerun the script after `pkg update -y`.
 5. Statsmodels fails with `cpow` / `cpowf` undeclared
    - The script now auto-applies a build workaround (`-include complex.h`) during pip fallback.
+6. Statsmodels fails with `NameError: name 'cythonize' is not defined`
+   - The script now retries statsmodels install with explicit `Cython<3.1` and `--no-build-isolation`.
 
 ## Quality Checks
 

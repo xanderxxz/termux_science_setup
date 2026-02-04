@@ -360,7 +360,12 @@ install_statsmodels_for_full_profile() {
 
   warn "Falling back to pip source build for statsmodels==${STATSMODELS_VERSION}."
   warn "Using CFLAGS workaround for missing cpow/cpowf declarations on some Termux toolchains."
-  run_cmd "${build_cmd[@]}" "${PYTHON_BIN}" -m pip "${pip_args[@]}" --no-build-isolation "statsmodels==${STATSMODELS_VERSION}" -c "${CONSTRAINTS_FILE}"
+
+  if ! run_cmd "${build_cmd[@]}" "${PYTHON_BIN}" -m pip "${pip_args[@]}" "statsmodels==${STATSMODELS_VERSION}" -c "${CONSTRAINTS_FILE}"; then
+    warn "Build-isolated statsmodels install failed; retrying with explicit Cython and --no-build-isolation."
+    run_cmd "${PYTHON_BIN}" -m pip "${pip_args[@]}" "Cython<3.1"
+    run_cmd "${build_cmd[@]}" "${PYTHON_BIN}" -m pip "${pip_args[@]}" --no-build-isolation "statsmodels==${STATSMODELS_VERSION}" -c "${CONSTRAINTS_FILE}"
+  fi
 
   if ! python_has_module "statsmodels"; then
     die "statsmodels installation finished but import still fails."
