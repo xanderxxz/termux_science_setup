@@ -14,6 +14,7 @@ ENV_OUTPUT="${SCRIPT_DIR}/installed-env.txt"
 
 PROFILE="full"
 INSTALL_JUPYTER=1
+INSTALL_CODEX=0
 WITH_UPGRADE=0
 KEEP_CACHE=0
 DRY_RUN=0
@@ -79,6 +80,7 @@ Profiles:
 
 Optional behavior:
   --no-jupyter          Skip JupyterLab installation
+  --install-codex       Install OpenAI Codex CLI via npm (`npm i -g @openai/codex`)
   --venv <path>         Install Python packages inside a virtual environment
   --with-upgrade        Run pkg upgrade -y after pkg update -y
   --keep-cache          Keep pip cache in ./_build/pip-cache (default uses --no-cache-dir)
@@ -118,6 +120,10 @@ run_cmd() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+is_npm_package_installed() {
+  npm list -g --depth=0 "$1" >/dev/null 2>&1
 }
 
 require_commands() {
@@ -171,6 +177,22 @@ install_missing_pkgs() {
   fi
 
   run_cmd pkg install -y "${missing[@]}"
+}
+
+ensure_nodejs_and_npm() {
+  if command_exists npm; then
+    return
+  fi
+
+  if is_pkg_available nodejs; then
+    install_missing_pkgs nodejs
+  elif is_pkg_available nodejs-lts; then
+    install_missing_pkgs nodejs-lts
+  else
+    die "Could not find nodejs or nodejs-lts in current Termux repositories."
+  fi
+
+  require_commands npm
 }
 
 clean_generated_artifacts() {
@@ -304,6 +326,22 @@ install_python_dependencies() {
   run_cmd "${PYTHON_BIN}" -m pip "${pip_args[@]}" -r "${SELECTED_REQUIREMENTS}" -c "${CONSTRAINTS_FILE}"
 }
 
+install_codex_cli_if_requested() {
+  if (( INSTALL_CODEX == 0 )); then
+    return
+  fi
+
+  ensure_nodejs_and_npm
+
+  if is_npm_package_installed "@openai/codex"; then
+    log "Codex CLI already installed globally."
+  else
+    run_cmd npm install -g @openai/codex
+  fi
+
+  log "Codex CLI ready. Next steps: codex --login && codex"
+}
+
 write_install_reports() {
   if (( DRY_RUN )); then
     log "Dry run: skipping report generation"
@@ -338,6 +376,9 @@ parse_args() {
         ;;
       --no-jupyter)
         INSTALL_JUPYTER=0
+        ;;
+      --install-codex)
+        INSTALL_CODEX=1
         ;;
       --venv)
         shift
@@ -397,6 +438,7 @@ main() {
 
   log "Profile: ${PROFILE}"
   log "Install JupyterLab: ${INSTALL_JUPYTER}"
+  log "Install Codex CLI: ${INSTALL_CODEX}"
   log "Dry run: ${DRY_RUN}"
   log "Virtual env: ${VENV_PATH:-<system>}"
 
@@ -427,6 +469,7 @@ main() {
   build_selected_requirements
   patch_openmp_sysconfig_if_needed
   install_python_dependencies
+  install_codex_cli_if_requested
   write_install_reports
 
   log "Installation finished."

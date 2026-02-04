@@ -9,6 +9,7 @@ Install a reproducible scientific Python stack on Termux with one script and pro
 - Graceful fallback when a Termux package is unavailable (script skips it and continues with pip-managed deps).
 - Reproducible Python dependency resolution via `requirements.txt` + `constraints.txt`.
 - Optional virtual environment support.
+- Optional OpenAI Codex CLI install (`--install-codex`).
 - Generated install reports:
   - `installed-freeze.txt`
   - `installed-env.txt`
@@ -50,6 +51,7 @@ python scientific-libraries-test.py --lite
 - `--lite`: minimal data-science profile (`numpy`, `pandas`, `matplotlib`, optional JupyterLab).
 - `--full`: full profile (default), adds `scipy`, `scikit-learn`, `statsmodels`, `opencv`, etc.
 - `--no-jupyter`: skip JupyterLab.
+- `--install-codex`: install OpenAI Codex CLI globally with npm (`@openai/codex`).
 - `--venv <path>`: create/use a virtual environment and install pip packages there.
 - `--with-upgrade`: run `pkg upgrade -y` after `pkg update -y`.
 - `--keep-cache`: keep pip cache under `./_build/pip-cache` (default disables pip cache).
@@ -82,6 +84,14 @@ Dry-run preview:
 
 ```bash
 ./termux_science_setup.sh --full --dry-run
+```
+
+Install full profile + Codex CLI:
+
+```bash
+./termux_science_setup.sh --full --install-codex
+codex --login
+codex
 ```
 
 Clean generated artifacts:
