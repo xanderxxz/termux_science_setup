@@ -1,0 +1,6 @@
+pyzmq
+jupyterlab            # jupyter
+seaborn               # full-only
+openpyxl              # full-only
+scikit-learn          # full-only
+statsmodels           # full-only

@@ -1,137 +1,422 @@
-#!/bin/bash
-# Install Jupyter lab and data science packages on Termux
-# Exit on error
-set -e
+#!/usr/bin/env bash
+# Install a scientific Python stack in Termux with reproducible options.
 
-echo "==== Setting up Data Science Environment in Termux ===="
+set -euo pipefail
+IFS=$'\n\t'
 
-# Function to check if a command succeeded
-check_success() {
-    if [ $? -eq 0 ]; then
-        echo "✅ $1 completed successfully"
-    else
-        echo "❌ $1 failed, exiting"
-        exit 1
-    fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DIR="${SCRIPT_DIR}/_build"
+BACKUP_DIR="${BUILD_DIR}/backups"
+REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
+CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints.txt"
+FREEZE_OUTPUT="${SCRIPT_DIR}/installed-freeze.txt"
+ENV_OUTPUT="${SCRIPT_DIR}/installed-env.txt"
+
+PROFILE="full"
+INSTALL_JUPYTER=1
+WITH_UPGRADE=0
+KEEP_CACHE=0
+DRY_RUN=0
+CLEAN_ONLY=0
+VENV_PATH=""
+PYTHON_BIN="python"
+SELECTED_REQUIREMENTS=""
+PATCHED_FILE=""
+PATCH_BACKUP=""
+
+BASE_PKGS=(
+  git
+  clang
+  python
+  libzmq
+  rust
+  binutils
+  cmake
+  wget
+  which
+  patchelf
+)
+
+BUILD_PKGS=(
+  build-essential
+  ninja
+  flang
+  libopenblas
+  libandroid-execinfo
+  binutils-is-llvm
+)
+
+LITE_PKGS=(
+  python-numpy
+  python-pandas
+  matplotlib
+)
+
+FULL_EXTRA_PKGS=(
+  python-scipy
+  python-pyarrow
+)
+
+log() {
+  printf '[INFO] %s\n' "$*"
 }
 
-# Update and upgrade packages
-echo "Updating Termux packages..."
-pkg update -y && pkg upgrade -y
-check_success "Package update"
+warn() {
+  printf '[WARN] %s\n' "$*" >&2
+}
 
-# Install core dependencies
-echo "Installing core dependencies..."
-pkg install -y git clang python libzmq rust binutils cmake wget which patchelf
-check_success "Core dependencies installation"
+die() {
+  printf '[ERROR] %s\n' "$*" >&2
+  exit 1
+}
 
-# Install build tools first (needed for many packages)
-echo "Installing build tools..."
-pkg install -y build-essential ninja flang libopenblas libandroid-execinfo patchelf binutils-is-llvm
-check_success "Build tools installation"
+usage() {
+  cat <<'EOF'
+Usage: ./termux_science_setup.sh [OPTIONS]
 
-# Install Python packaging tools
-echo "Installing Python packaging tools..."
-pip install maturin setuptools wheel packaging pyproject_metadata cython meson-python versioneer setuptools-scm pythran patsy formulaic pytest
-check_success "Python packaging tools installation"
+Profiles:
+  --lite                Install minimal stack (numpy, pandas, matplotlib, optional jupyter)
+  --full                Install full stack (default)
 
-# Get Python version dynamically
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-echo "Detected Python $PYTHON_VERSION"
+Optional behavior:
+  --no-jupyter          Skip JupyterLab installation
+  --venv <path>         Install Python packages inside a virtual environment
+  --with-upgrade        Run pkg upgrade -y after pkg update -y
+  --keep-cache          Keep pip cache in ./_build/pip-cache (default uses --no-cache-dir)
+  --dry-run             Print commands without executing them
+  --clean               Remove script-generated artifacts (./_build and install reports)
+  -h, --help            Show this message
+EOF
+}
 
-# Fix OpenMP issues
-echo "Fixing OpenMP configuration..."
-_file="$(find $PREFIX/lib/python$PYTHON_VERSION -name "*sysconfigdata*.py")"
-if [ -z "$_file" ]; then
-    echo "Error: Could not find sysconfigdata file"
-    exit 1
-fi
+on_error() {
+  local exit_code="$?"
+  local line_number="${1:-unknown}"
+  local command_text="${2:-unknown}"
 
-rm -rf $PREFIX/lib/python$PYTHON_VERSION/__pycache__
-cp "$_file" "$_file.backup"
-sed -i 's|-fno-openmp-implicit-rpath||g' "$_file"
-check_success "OpenMP configuration fix"
+  warn "Command failed at line ${line_number}: ${command_text}"
 
-# Install ZMQ and Jupyter
-echo "Installing pyzmq and Jupyter..."
-pip install pyzmq
-pip install jupyter
-check_success "Jupyter installation"
+  if [[ -n "${PATCH_BACKUP}" && -n "${PATCHED_FILE}" && -f "${PATCH_BACKUP}" ]]; then
+    warn "Restoring patched sysconfig file from backup: ${PATCH_BACKUP}"
+    cp -- "${PATCH_BACKUP}" "${PATCHED_FILE}" || true
+  fi
 
-# Patch ZMQ library with correct Python version
-echo "Patching ZMQ library..."
-ZMQ_SO_PATH="/data/data/com.termux/files/usr/lib/python$PYTHON_VERSION/site-packages/zmq/backend/cython/_zmq.cpython-${PYTHON_VERSION//./}.so"
-if [ -f "$ZMQ_SO_PATH" ]; then
-    patchelf --add-needed libpython$PYTHON_VERSION.so "$ZMQ_SO_PATH"
-else
-    echo "Warning: ZMQ library not found at expected location."
-    # Try to find it
-    ZMQ_SO_PATH=$(find $PREFIX/lib/python$PYTHON_VERSION -name "_zmq.cpython-*.so")
-    if [ -n "$ZMQ_SO_PATH" ]; then
-        patchelf --add-needed libpython$PYTHON_VERSION.so "$ZMQ_SO_PATH"
-    else
-        echo "Error: Could not find ZMQ library to patch."
-        exit 1
+  exit "${exit_code}"
+}
+
+trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
+
+run_cmd() {
+  if (( DRY_RUN )); then
+    printf '[DRY-RUN]'
+    printf ' %q' "$@"
+    printf '\n'
+    return 0
+  fi
+
+  "$@"
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+require_commands() {
+  local missing=()
+  local command_name
+
+  for command_name in "$@"; do
+    if ! command_exists "${command_name}"; then
+      missing+=("${command_name}")
     fi
-fi
-check_success "ZMQ patching"
+  done
 
-# Install scientific libraries
-echo "Installing scientific packages (this may take some time)..."
-pkg install -y matplotlib python-numpy python-scipy python-pyarrow
-check_success "Scientific packages installation"
+  if (( ${#missing[@]} > 0 )); then
+    die "Missing required command(s): ${missing[*]}"
+  fi
+}
 
-# Install pandas with correct flags
-echo "Installing pandas..."
-LDFLAGS="-lpython$PYTHON_VERSION" pip3 install --no-build-isolation --no-cache-dir pandas
-check_success "Pandas installation"
+is_pkg_installed() {
+  dpkg -s "$1" >/dev/null 2>&1
+}
 
-# Install scikit-learn
-echo "Installing scikit-learn..."
-pip install scikit-learn -v --no-build-isolation
-check_success "Scikit-learn installation"
+install_missing_pkgs() {
+  local packages=("$@")
+  local missing=()
+  local package_name
 
-# Install additional data science libraries
-echo "Installing additional libraries..."
-pip install seaborn openpyxl
-check_success "Additional libraries installation"
+  for package_name in "${packages[@]}"; do
+    if ! is_pkg_installed "${package_name}"; then
+      missing+=("${package_name}")
+    fi
+  done
 
-# Get Android API level
-API_LEVEL=$(getprop ro.build.version.sdk)
-echo "Android API level: $API_LEVEL"
+  if (( ${#missing[@]} == 0 )); then
+    log "Packages already installed: ${packages[*]}"
+    return
+  fi
 
-# Force reinstall numpy for compatibility
-echo "Reinstalling numpy for better compatibility..."
-pip3 install --upgrade --force-reinstall numpy
-check_success "Numpy reinstallation"
+  run_cmd pkg install -y "${missing[@]}"
+}
 
-# Install OpenCV
-echo "Installing OpenCV..."
-pkg install -y x11-repo
-pkg update
-pkg install -y opencv-python
-check_success "OpenCV installation"
+clean_generated_artifacts() {
+  local paths=(
+    "${BUILD_DIR}"
+    "${FREEZE_OUTPUT}"
+    "${ENV_OUTPUT}"
+  )
+  local target
 
-# Install statsmodels from source with proper flags
-echo "Installing statsmodels from source..."
-if [ ! -d "statsmodels" ]; then
-    git clone https://github.com/statsmodels/statsmodels.git
-    check_success "Statsmodels repository cloning"
-fi
-cd statsmodels
-# Use detected API level instead of hardcoded 34
-CFLAGS+=" -U__ANDROID_API__ -D__ANDROID_API__=$API_LEVEL" MATHLIB=m LDFLAGS="-lpython$PYTHON_VERSION" python -m pip install . --no-build-isolation
-check_success "Statsmodels installation"
+  for target in "${paths[@]}"; do
+    if [[ -e "${target}" ]]; then
+      run_cmd rm -rf -- "${target}"
+      log "Removed ${target}"
+    fi
+  done
+}
 
-# Install Gemini-Cli
-pkg install nodejs
-npm install -g @google/gemini-cli
-check_success "Gemini-Cli installation"
+prepare_python_context() {
+  if [[ -z "${VENV_PATH}" ]]; then
+    PYTHON_BIN="python"
+    return
+  fi
 
-# Clean up
-echo "Cleaning package cache..."
-pip cache purge
-check_success "Cache cleanup"
+  if [[ ! -x "${VENV_PATH}/bin/python" ]]; then
+    log "Creating virtual environment at ${VENV_PATH}"
+    run_cmd python -m venv "${VENV_PATH}"
+  fi
 
-echo "==== Installation Complete ===="
-echo "You can now run Jupyter with: jupyter lab or run basic tests with: python scientific-libraries-test.py"
+  PYTHON_BIN="${VENV_PATH}/bin/python"
+
+  if [[ ! -x "${PYTHON_BIN}" ]]; then
+    die "Unable to find Python executable in virtual environment: ${PYTHON_BIN}"
+  fi
+}
+
+build_selected_requirements() {
+  SELECTED_REQUIREMENTS="${BUILD_DIR}/requirements-selected.txt"
+  run_cmd mkdir -p "${BUILD_DIR}"
+
+  if (( DRY_RUN )); then
+    log "Would generate filtered requirements at ${SELECTED_REQUIREMENTS}"
+    return
+  fi
+
+  awk \
+    -v profile="${PROFILE}" \
+    -v no_jupyter="$((1 - INSTALL_JUPYTER))" \
+    '
+      /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+      {
+        if (profile == "lite" && $0 ~ /# *full-only/) next
+        if (no_jupyter == 1 && $0 ~ /# *jupyter/) next
+        gsub(/[[:space:]]+#.*/, "", $0)
+        print
+      }
+    ' "${REQUIREMENTS_FILE}" > "${SELECTED_REQUIREMENTS}"
+
+  if [[ ! -s "${SELECTED_REQUIREMENTS}" ]]; then
+    die "Filtered requirements file is empty: ${SELECTED_REQUIREMENTS}"
+  fi
+}
+
+patch_openmp_sysconfig_if_needed() {
+  if [[ "${PROFILE}" != "full" ]]; then
+    return
+  fi
+
+  local stdlib_dir
+  local -a matches=()
+  local file_path
+
+  stdlib_dir="$("${PYTHON_BIN}" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
+
+  while IFS= read -r file_path; do
+    matches+=("${file_path}")
+  done < <(find "${stdlib_dir}" -maxdepth 2 -type f -name '*sysconfigdata*.py')
+
+  if (( ${#matches[@]} == 0 )); then
+    warn "No sysconfigdata file found in ${stdlib_dir}; skipping OpenMP patch."
+    return
+  fi
+
+  if (( ${#matches[@]} > 1 )); then
+    warn "Found multiple sysconfigdata files; skipping patch to avoid unsafe mutation."
+    printf '%s\n' "${matches[@]}" >&2
+    return
+  fi
+
+  file_path="${matches[0]}"
+
+  if ! grep -q -- '-fno-openmp-implicit-rpath' "${file_path}"; then
+    log "OpenMP flag not present in ${file_path}; patch not required."
+    return
+  fi
+
+  log "OpenMP lines before patch:"
+  grep -n -- '-fno-openmp-implicit-rpath' "${file_path}" || true
+
+  run_cmd mkdir -p "${BACKUP_DIR}"
+  PATCH_BACKUP="${BACKUP_DIR}/$(basename "${file_path}").$(date +%Y%m%d-%H%M%S).bak"
+  PATCHED_FILE="${file_path}"
+  run_cmd cp -- "${file_path}" "${PATCH_BACKUP}"
+
+  if (( DRY_RUN )); then
+    log "Dry run: patch would be applied to ${file_path}; backup path ${PATCH_BACKUP}"
+    return
+  fi
+
+  sed -i 's|-fno-openmp-implicit-rpath||g' "${file_path}"
+
+  log "OpenMP lines after patch:"
+  grep -n -- '-fno-openmp-implicit-rpath' "${file_path}" || true
+
+  if grep -q -- '-fno-openmp-implicit-rpath' "${file_path}"; then
+    die "OpenMP patch verification failed for ${file_path}"
+  fi
+
+  log "OpenMP patch applied to ${file_path}; backup: ${PATCH_BACKUP}"
+  log "Restore command: cp -- \"${PATCH_BACKUP}\" \"${file_path}\""
+}
+
+install_python_dependencies() {
+  local pip_args=(install)
+
+  if (( KEEP_CACHE == 0 )); then
+    pip_args+=(--no-cache-dir)
+  fi
+
+  run_cmd "${PYTHON_BIN}" -m pip "${pip_args[@]}" --upgrade pip setuptools wheel
+  run_cmd "${PYTHON_BIN}" -m pip "${pip_args[@]}" -r "${SELECTED_REQUIREMENTS}" -c "${CONSTRAINTS_FILE}"
+}
+
+write_install_reports() {
+  if (( DRY_RUN )); then
+    log "Dry run: skipping report generation"
+    return
+  fi
+
+  "${PYTHON_BIN}" -m pip freeze > "${FREEZE_OUTPUT}"
+
+  {
+    printf 'timestamp_utc: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    "${PYTHON_BIN}" --version
+    uname -a
+    if command_exists termux-info; then
+      termux-info
+    else
+      printf 'termux-info: unavailable\n'
+    fi
+  } > "${ENV_OUTPUT}"
+
+  log "Wrote ${FREEZE_OUTPUT}"
+  log "Wrote ${ENV_OUTPUT}"
+}
+
+parse_args() {
+  while (( $# > 0 )); do
+    case "$1" in
+      --lite)
+        PROFILE="lite"
+        ;;
+      --full)
+        PROFILE="full"
+        ;;
+      --no-jupyter)
+        INSTALL_JUPYTER=0
+        ;;
+      --venv)
+        shift
+        if (( $# == 0 )); then
+          die "--venv requires a path"
+        fi
+        VENV_PATH="$1"
+        ;;
+      --dry-run)
+        DRY_RUN=1
+        ;;
+      --clean)
+        CLEAN_ONLY=1
+        ;;
+      --with-upgrade)
+        WITH_UPGRADE=1
+        ;;
+      --keep-cache)
+        KEEP_CACHE=1
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "Unknown option: $1"
+        ;;
+    esac
+    shift
+  done
+}
+
+main() {
+  parse_args "$@"
+
+  if (( CLEAN_ONLY )); then
+    clean_generated_artifacts
+    log "Clean completed."
+    exit 0
+  fi
+
+  require_commands pkg dpkg find sed grep awk uname
+
+  if (( KEEP_CACHE )); then
+    run_cmd mkdir -p "${BUILD_DIR}/pip-cache"
+    export PIP_CACHE_DIR="${BUILD_DIR}/pip-cache"
+    log "Using pip cache at ${PIP_CACHE_DIR}"
+  fi
+
+  if [[ ! -f "${REQUIREMENTS_FILE}" ]]; then
+    die "Missing ${REQUIREMENTS_FILE}"
+  fi
+
+  if [[ ! -f "${CONSTRAINTS_FILE}" ]]; then
+    die "Missing ${CONSTRAINTS_FILE}"
+  fi
+
+  log "Profile: ${PROFILE}"
+  log "Install JupyterLab: ${INSTALL_JUPYTER}"
+  log "Dry run: ${DRY_RUN}"
+  log "Virtual env: ${VENV_PATH:-<system>}"
+
+  run_cmd pkg update -y
+
+  if (( WITH_UPGRADE )); then
+    run_cmd pkg upgrade -y
+  fi
+
+  install_missing_pkgs "${BASE_PKGS[@]}"
+  install_missing_pkgs "${BUILD_PKGS[@]}"
+  install_missing_pkgs "${LITE_PKGS[@]}"
+
+  require_commands python
+
+  if [[ "${PROFILE}" == "full" ]]; then
+    install_missing_pkgs "${FULL_EXTRA_PKGS[@]}"
+
+    if ! is_pkg_installed x11-repo; then
+      run_cmd pkg install -y x11-repo
+      run_cmd pkg update -y
+    fi
+
+    install_missing_pkgs opencv-python
+  fi
+
+  prepare_python_context
+  build_selected_requirements
+  patch_openmp_sysconfig_if_needed
+  install_python_dependencies
+  write_install_reports
+
+  log "Installation finished."
+  log "Run validation with: ${PYTHON_BIN} ${SCRIPT_DIR}/scientific-libraries-test.py"
+}
+
+main "$@"

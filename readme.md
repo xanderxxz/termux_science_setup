@@ -1,101 +1,132 @@
 # Termux Science Setup
 
-A collection of scripts to set up a complete data science environment in Termux on Android devices.
+Install a reproducible scientific Python stack on Termux with one script and profile flags.
 
-## Overview
+## Highlights
 
-This repository provides scripts to easily install and test a comprehensive scientific computing and data analysis environment on Android using Termux. With these scripts, you can transform your Android device into a portable data science workstation with Jupyter notebooks and popular scientific Python libraries.
-
-## Features
-
-- **One-command installation** of a complete data science stack
-- **Automatic compatibility fixes** for Android-specific issues
-- **Dynamic detection** of Python version and Android API level
-- **Comprehensive test suite** to verify your installation
-- **Support for popular libraries** including:
-  - NumPy, SciPy, Pandas
-  - Matplotlib, Seaborn
-  - Scikit-learn, Statsmodels
-  - OpenCV
-  - Jupyter Lab
-  - Gemini-Cli
+- Strict-mode installer (`set -euo pipefail`) with line-level error reporting.
+- Re-runnable package installs (already-installed `pkg` packages are skipped).
+- Reproducible Python dependency resolution via `requirements.txt` + `constraints.txt`.
+- Optional virtual environment support.
+- Generated install reports:
+  - `installed-freeze.txt`
+  - `installed-env.txt`
 
 ## Requirements
 
-- Android device
-- [Termux](https://github.com/termux/termux-app) (available on F-Droid)
-- At least 6GB of free storage
-- 4GB or more RAM recommended
+- Android device with Termux (F-Droid build recommended)
+- At least 6 GB free storage
+- 4 GB RAM recommended
 
-## Installation
-
-1. Install Termux from F-Droid
-2. Open Termux and run the following commands:
+## Quick Start
 
 ```bash
 pkg install -y git
 git clone https://github.com/FGBASTANTE/termux_science_setup.git
 cd termux_science_setup
 chmod +x termux_science_setup.sh
-./termux_science_setup.sh
+./termux_science_setup.sh --full
 ```
 
-The installation process may take 30-60 minutes depending on your device's speed and internet connection.
+Run validation:
 
-## Testing Your Installation
-
-After installation, you can verify that everything is working correctly by running the test script:
-
-```
+```bash
 python scientific-libraries-test.py
 ```
 
-This will check that all libraries are properly installed and functioning.
-
-## Usage
-
-Once installation is complete, you can start a Jupyter server:
+If you installed the lite profile, run:
 
 ```bash
-jupyter lab
+python scientific-libraries-test.py --lite
 ```
 
-Since Termux doesn't have a built-in browser, you'll need to:
+## Installer Flags
 
-1. Note the URL and token from the Jupyter output
-2. Open a browser on your device and navigate to that URL
-   - Typically `http://localhost:8888/?token=<your_token>`
+```bash
+./termux_science_setup.sh [options]
+```
 
-Alternatively, you can access it from another device on the same network by using your device's IP address.
+- `--lite`: minimal data-science profile (`numpy`, `pandas`, `matplotlib`, optional JupyterLab).
+- `--full`: full profile (default), adds `scipy`, `scikit-learn`, `statsmodels`, `opencv`, etc.
+- `--no-jupyter`: skip JupyterLab.
+- `--venv <path>`: create/use a virtual environment and install pip packages there.
+- `--with-upgrade`: run `pkg upgrade -y` after `pkg update -y`.
+- `--keep-cache`: keep pip cache under `./_build/pip-cache` (default disables pip cache).
+- `--dry-run`: print commands without executing.
+- `--clean`: remove installer-generated artifacts (`./_build`, `installed-freeze.txt`, `installed-env.txt`).
+
+## Example Commands
+
+Full install:
+
+```bash
+./termux_science_setup.sh --full
+```
+
+Lite install:
+
+```bash
+./termux_science_setup.sh --lite
+```
+
+Full install in virtual environment:
+
+```bash
+./termux_science_setup.sh --full --venv .venv
+. .venv/bin/activate
+python scientific-libraries-test.py
+```
+
+Dry-run preview:
+
+```bash
+./termux_science_setup.sh --full --dry-run
+```
+
+Clean generated artifacts:
+
+```bash
+./termux_science_setup.sh --clean
+```
+
+## Notes on Reproducibility
+
+- Python package versions are pinned through `constraints.txt`.
+- Termux `pkg` repositories are rolling; exact native package versions can still change over time.
+
+## OpenMP Sysconfig Patch Guard
+
+The installer checks for `-fno-openmp-implicit-rpath` in Python sysconfig and patches only when needed.
+
+- It requires exactly one matching `*sysconfigdata*.py` file.
+- It creates a timestamped backup in `./_build/backups/`.
+- On script failure, the backup is auto-restored by trap.
+- A restore command is printed after patching.
 
 ## Troubleshooting
 
-Tested in Samsung Galaxy Tab S9+ without errors 
+1. Storage pressure during pip builds
+   - Keep default no-cache behavior, or run `--clean` before retrying.
+2. Unexpected package resolver conflicts
+   - Check `installed-freeze.txt` and `installed-env.txt`.
+3. OpenMP patch concerns
+   - Use the printed restore command to revert sysconfig.
 
-### Common Issues
+## Quality Checks
 
-1. **Out of memory errors**
-   - Close other apps on your device
-   - Restart Termux and try again
+Run ShellCheck locally:
 
-2. **Package installation failures**
-   - Run `pkg update && pkg upgrade` and try again
-   - Check your internet connection
+```bash
+pkg install -y shellcheck
+shellcheck termux_science_setup.sh
+```
 
-3. **Library import errors**
-   - Check the test script output for details
-   - Try reinstalling the specific package
+The repo includes a GitHub Actions workflow that runs:
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+- ShellCheck on `termux_science_setup.sh`
+- Python smoke validation (`scientific-libraries-test.py`) in a standard Ubuntu venv
+  (this catches regressions but does not emulate Termux internals).
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- The Termux developers for creating an amazing terminal emulator
-- The Python scientific computing community
-- All contributors to this project
+MIT License (`LICENSE`)
