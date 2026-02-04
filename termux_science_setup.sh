@@ -48,7 +48,6 @@ BUILD_PKGS=(
 
 LITE_PKGS=(
   python-numpy
-  python-pandas
   matplotlib
 )
 
@@ -140,19 +139,34 @@ is_pkg_installed() {
   dpkg -s "$1" >/dev/null 2>&1
 }
 
+is_pkg_available() {
+  apt-cache show -- "$1" >/dev/null 2>&1
+}
+
 install_missing_pkgs() {
   local packages=("$@")
   local missing=()
+  local unavailable=()
   local package_name
 
   for package_name in "${packages[@]}"; do
-    if ! is_pkg_installed "${package_name}"; then
+    if is_pkg_installed "${package_name}"; then
+      continue
+    fi
+
+    if is_pkg_available "${package_name}"; then
       missing+=("${package_name}")
+    else
+      unavailable+=("${package_name}")
     fi
   done
 
+  if (( ${#unavailable[@]} > 0 )); then
+    warn "Skipping unavailable pkg package(s): ${unavailable[*]}"
+  fi
+
   if (( ${#missing[@]} == 0 )); then
-    log "Packages already installed: ${packages[*]}"
+    log "No installable pkg entries needed from set: ${packages[*]}"
     return
   fi
 
@@ -365,7 +379,7 @@ main() {
     exit 0
   fi
 
-  require_commands pkg dpkg find sed grep awk uname
+  require_commands pkg dpkg apt-cache find sed grep awk uname
 
   if (( KEEP_CACHE )); then
     run_cmd mkdir -p "${BUILD_DIR}/pip-cache"

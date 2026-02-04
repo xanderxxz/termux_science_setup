@@ -6,6 +6,7 @@ Install a reproducible scientific Python stack on Termux with one script and pro
 
 - Strict-mode installer (`set -euo pipefail`) with line-level error reporting.
 - Re-runnable package installs (already-installed `pkg` packages are skipped).
+- Graceful fallback when a Termux package is unavailable (script skips it and continues with pip-managed deps).
 - Reproducible Python dependency resolution via `requirements.txt` + `constraints.txt`.
 - Optional virtual environment support.
 - Generated install reports:
@@ -111,6 +112,8 @@ The installer checks for `-fno-openmp-implicit-rpath` in Python sysconfig and pa
    - Check `installed-freeze.txt` and `installed-env.txt`.
 3. OpenMP patch concerns
    - Use the printed restore command to revert sysconfig.
+4. `E: Unable to locate package ...`
+   - The installer now skips unavailable `pkg` names automatically; rerun the script after `pkg update -y`.
 
 ## Quality Checks
 

@@ -1,4 +1,5 @@
 pyzmq
+pandas
 jupyterlab            # jupyter
 seaborn               # full-only
 openpyxl              # full-only
