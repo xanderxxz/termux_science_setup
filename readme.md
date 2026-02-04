@@ -24,7 +24,7 @@ Install a reproducible scientific Python stack on Termux with one script and pro
 
 ```bash
 pkg install -y git
-git clone https://github.com/xanderxxz/termux_science_setup.git
+git clone -b feature/codex-cli-install https://github.com/xanderxxz/termux_science_setup.git
 cd termux_science_setup
 chmod +x termux_science_setup.sh
 ./termux_science_setup.sh --full
