@@ -8,6 +8,7 @@ Install a reproducible scientific Python stack on Termux with one script and pro
 - Re-runnable package installs (already-installed `pkg` packages are skipped).
 - Graceful fallback when a Termux package is unavailable (script skips it and continues with pip-managed deps).
 - Reproducible Python dependency resolution via `requirements.txt` + `constraints.txt`.
+- Statsmodels install fallback: prefers `python-statsmodels` pkg, then uses pip build with Termux-safe flags.
 - Optional virtual environment support.
 - Generated install reports:
   - `installed-freeze.txt`
@@ -114,6 +115,8 @@ The installer checks for `-fno-openmp-implicit-rpath` in Python sysconfig and pa
    - Use the printed restore command to revert sysconfig.
 4. `E: Unable to locate package ...`
    - The installer now skips unavailable `pkg` names automatically; rerun the script after `pkg update -y`.
+5. Statsmodels fails with `cpow` / `cpowf` undeclared
+   - The script now auto-applies a build workaround (`-include complex.h`) during pip fallback.
 
 ## Quality Checks
 

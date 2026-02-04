@@ -11,6 +11,7 @@ REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
 CONSTRAINTS_FILE="${SCRIPT_DIR}/constraints.txt"
 FREEZE_OUTPUT="${SCRIPT_DIR}/installed-freeze.txt"
 ENV_OUTPUT="${SCRIPT_DIR}/installed-env.txt"
+STATSMODELS_VERSION="0.14.6"
 
 PROFILE="full"
 INSTALL_JUPYTER=1
@@ -304,6 +305,68 @@ install_python_dependencies() {
   run_cmd "${PYTHON_BIN}" -m pip "${pip_args[@]}" -r "${SELECTED_REQUIREMENTS}" -c "${CONSTRAINTS_FILE}"
 }
 
+python_has_module() {
+  "${PYTHON_BIN}" -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('${1}') else 1)"
+}
+
+install_statsmodels_for_full_profile() {
+  if [[ "${PROFILE}" != "full" ]]; then
+    return
+  fi
+
+  if python_has_module "statsmodels"; then
+    log "statsmodels is already available in ${PYTHON_BIN}"
+    return
+  fi
+
+  if is_pkg_available python-statsmodels; then
+    log "Installing statsmodels from Termux package: python-statsmodels"
+    install_missing_pkgs python-statsmodels
+  else
+    warn "Termux package python-statsmodels not available on this mirror."
+  fi
+
+  if python_has_module "statsmodels"; then
+    return
+  fi
+
+  local pip_args=(install)
+  local api_level=""
+  local -a build_cmd=()
+
+  if (( KEEP_CACHE == 0 )); then
+    pip_args+=(--no-cache-dir)
+  fi
+
+  if command_exists getprop; then
+    api_level="$(getprop ro.build.version.sdk 2>/dev/null || true)"
+  fi
+
+  if [[ -n "${api_level}" ]]; then
+    build_cmd=(
+      env
+      "CFLAGS=-include complex.h -U__ANDROID_API__ -D__ANDROID_API__=${api_level}"
+      "MATHLIB=m"
+      "LDFLAGS=-lm"
+    )
+  else
+    build_cmd=(
+      env
+      "CFLAGS=-include complex.h"
+      "MATHLIB=m"
+      "LDFLAGS=-lm"
+    )
+  fi
+
+  warn "Falling back to pip source build for statsmodels==${STATSMODELS_VERSION}."
+  warn "Using CFLAGS workaround for missing cpow/cpowf declarations on some Termux toolchains."
+  run_cmd "${build_cmd[@]}" "${PYTHON_BIN}" -m pip "${pip_args[@]}" --no-build-isolation "statsmodels==${STATSMODELS_VERSION}" -c "${CONSTRAINTS_FILE}"
+
+  if ! python_has_module "statsmodels"; then
+    die "statsmodels installation finished but import still fails."
+  fi
+}
+
 write_install_reports() {
   if (( DRY_RUN )); then
     log "Dry run: skipping report generation"
@@ -427,6 +490,7 @@ main() {
   build_selected_requirements
   patch_openmp_sysconfig_if_needed
   install_python_dependencies
+  install_statsmodels_for_full_profile
   write_install_reports
 
   log "Installation finished."
